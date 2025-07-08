@@ -1,0 +1,1214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simple Time Keeper</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background-color: white;
+            padding: 2.5rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+            width: 100%;
+            max-width: 48rem; /* Increased max-width for admin dashboard */
+        }
+        .table-container {
+            overflow-x: auto;
+            border-radius: 0.5rem;
+            border: 1px solid #e5e7eb;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        th, td {
+            padding: 0.75rem 1rem;
+            text-align: left;
+            border-bottom: 1px solid #e5e7eb;
+        }
+        th {
+            background-color: #eff6ff;
+            font-weight: 600;
+            color: #4b5563;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.05em;
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            background-color: white;
+            padding: 2rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            width: 100%;
+            max-width: 28rem;
+        }
+        /* Numeric keypad styling */
+        .numeric-keypad {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .numeric-keypad button {
+            padding: 20px;
+            font-size: 1.5rem;
+            font-weight: bold;
+            background-color: #e2e8f0;
+            border-radius: 0.5rem;
+            border: 1px solid #cbd5e1;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+        .numeric-keypad button:hover {
+            background-color: #cbd5e1;
+        }
+        .numeric-keypad button:active {
+            background-color: #94a3b8;
+        }
+        .numeric-keypad .clear-button {
+            grid-column: span 2;
+            background-color: #fca5a5;
+        }
+        .numeric-keypad .clear-button:hover {
+            background-color: #ef4444;
+        }
+        .edited-entry {
+            background-color: #fff9e6; /* Light yellow background */
+        }
+        .edited-entry-hover:hover {
+            background-color: #fff3cc; /* Slightly darker yellow on hover */
+        }
+    </style>
+</head>
+<body>
+    <div id="app" class="container">
+        <div class="text-center text-xl font-semibold text-gray-700">Loading application...</div>
+    </div>
+
+    <script>
+        // Base URL for your Python backend
+        const API_BASE_URL = 'http://127.0.0.1:5000'; // Make sure this matches your Flask server address
+
+        // State variables
+        let currentUser = null; // Stores logged-in ADMIN/TIMEKEEPER
+        let userRole = null; // Role of logged-in ADMIN/TIMEKEEPER
+        let currentScreen = 'welcome'; // 'welcome', 'workerStatus', 'adminDashboard'
+        let pinInput = ''; // For PIN entry
+        let kioskUserData = null; // Data received from /login_pin endpoint for non-admin/timekeeper users
+
+        // --- Helper Functions ---
+
+        /**
+         * Renders a message box modal.
+         * @param {string} msg - The message to display.
+         * @param {function} onConfirmCb - Callback function for OK button.
+         * @param {function} [onCancelCb] - Optional callback for Cancel button.
+         * @param {boolean} [showCancelBtn=false] - Whether to show the Cancel button.
+         */
+        function renderMessageBox(msg, onConfirmCb, onCancelCb = null, showCancelBtn = false) {
+            if (!msg) {
+                document.getElementById('message-box-modal')?.remove();
+                return;
+            }
+
+            let modal = document.getElementById('message-box-modal');
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = 'message-box-modal';
+                modal.className = 'modal';
+                document.body.appendChild(modal);
+            }
+
+            modal.innerHTML = `
+                <div class="modal-content text-center">
+                    <p class="text-lg font-medium mb-4">${msg}</p>
+                    <div class="flex justify-center space-x-4">
+                        <button id="msg-box-ok" class="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition duration-200">
+                            OK
+                        </button>
+                        ${showCancelBtn ? `<button id="msg-box-cancel" class="px-6 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400 transition duration-200">Cancel</button>` : ''}
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('msg-box-ok').onclick = () => {
+                onConfirmCb();
+                renderMessageBox(''); // Close message box
+            };
+            if (showCancelBtn) {
+                document.getElementById('msg-box-cancel').onclick = () => {
+                    onCancelCb();
+                    renderMessageBox(''); // Close message box
+                };
+            }
+        }
+
+        /**
+         * Renders a custom modal with provided content.
+         * @param {string} id - The ID for the modal element.
+         * @param {string} contentHtml - The HTML content to place inside the modal.
+         * @param {function} [onCloseCb] - Callback to run when the modal is closed.
+         */
+        function renderCustomModal(id, contentHtml, onCloseCb = null) {
+            let modal = document.getElementById(id);
+            if (!modal) {
+                modal = document.createElement('div');
+                modal.id = id;
+                modal.className = 'modal';
+                document.body.appendChild(modal);
+            }
+            modal.innerHTML = `<div class="modal-content">${contentHtml}</div>`;
+
+            // Attach a general click handler to close if clicking outside modal content
+            modal.onclick = (e) => {
+                if (e.target === modal) {
+                    modal.remove();
+                    if (onCloseCb) onCloseCb();
+                }
+            };
+        }
+
+        /**
+         * Closes a custom modal.
+         * @param {string} id - The ID of the modal to close.
+         * @param {function} [onCloseCb] - Callback to run after closing.
+         */
+        function closeCustomModal(id, onCloseCb = null) {
+            document.getElementById(id)?.remove();
+            if (onCloseCb) onCloseCb();
+        }
+
+        /**
+         * Formats a timestamp into a readable date and time string.
+         * @param {string|number} timestamp - The timestamp to format.
+         * @returns {string} Formatted date and time.
+         */
+        function formatTime(timestamp) {
+            if (!timestamp) return 'N/A';
+            const date = new Date(timestamp);
+            return date.toLocaleString();
+        }
+
+        /**
+         * Formats a timestamp into a date and time string suitable for datetime-local input.
+         * @param {string} isoString - An ISO format string.
+         * @returns {string} Formatted string for datetime-local input.
+         */
+        function formatToDatetimeLocal(isoString) {
+            if (!isoString) return '';
+            const date = new Date(isoString);
+            const year = date.getFullYear();
+            const month = (date.getMonth() + 1).toString().padStart(2, '0');
+            const day = date.getDate().toString().padStart(2, '0');
+            const hours = date.getHours().toString().padStart(2, '0');
+            const minutes = date.getMinutes().toString().padStart(2, '0');
+            return `${year}-${month}-${day}T${hours}:${minutes}`;
+        }
+
+        /**
+         * Handles user logout, clearing session data and returning to welcome screen.
+         * This acts as a "Leave Page" button for the kiosk-style interface.
+         */
+        function handleLogout() {
+            currentUser = null;
+            userRole = null;
+            localStorage.removeItem('currentUser');
+            localStorage.removeItem('userRole');
+            currentScreen = 'welcome'; // Go back to worker PIN screen
+            pinInput = ''; // Clear pin input
+            renderApp();
+        }
+
+        /**
+         * Renders the main application content based on currentScreen state.
+         */
+        function renderApp() {
+            const appDiv = document.getElementById('app');
+            if (!appDiv) return;
+
+            if (currentScreen === 'welcome') {
+                renderWelcomeScreen(appDiv);
+            } else if (currentScreen === 'workerStatus') {
+                renderWorkerStatusScreen(appDiv, kioskUserData); // Use kioskUserData for worker status
+            } else if (currentScreen === 'adminDashboard') {
+                renderAdminDashboard(appDiv);
+            } else {
+                renderAccessDenied(appDiv); // Fallback
+            }
+        }
+
+        // --- Welcome Screen (PIN Entry for All Users) ---
+        function renderWelcomeScreen(parentDiv) {
+            parentDiv.innerHTML = `
+                <div class="min-h-screen flex flex-col items-center justify-center bg-gray-100 p-4">
+                    <div class="bg-white p-8 rounded-lg shadow-lg max-w-md w-full text-center">
+                        <h2 class="text-4xl font-bold text-gray-800 mb-6">Welcome!</h2>
+                        <p class="text-xl text-gray-700 mb-4">Enter your PIN:</p>
+                        <input type="password" id="pin-input" class="w-full px-4 py-3 text-2xl text-center border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 tracking-widest" placeholder="****" readonly>
+                        <div class="numeric-keypad">
+                            <button class="keypad-btn" data-value="1">1</button>
+                            <button class="keypad-btn" data-value="2">2</button>
+                            <button class="keypad-btn" data-value="3">3</button>
+                            <button class="keypad-btn" data-value="4">4</button>
+                            <button class="keypad-btn" data-value="5">5</button>
+                            <button class="keypad-btn" data-value="6">6</button>
+                            <button class="keypad-btn" data-value="7">7</button>
+                            <button class="keypad-btn" data-value="8">8</button>
+                            <button class="keypad-btn" data-value="9">9</button>
+                            <button class="keypad-btn clear-button" data-value="clear">Clear</button>
+                            <button class="keypad-btn" data-value="0">0</button>
+                            <button class="keypad-btn" data-value="backspace">⌫</button>
+                        </div>
+                        <button id="enter-pin-btn" class="w-full mt-6 py-3 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition duration-200 text-lg font-semibold">
+                            Enter
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            const pinInputField = document.getElementById('pin-input');
+            pinInputField.value = pinInput; // Restore current pin input
+
+            // Numeric keypad input
+            document.querySelectorAll('.keypad-btn').forEach(button => {
+                button.onclick = (event) => {
+                    const value = event.target.dataset.value;
+                    if (value === 'clear') {
+                        pinInput = '';
+                    } else if (value === 'backspace') {
+                        pinInput = pinInput.slice(0, -1);
+                    } else {
+                        pinInput += value; // Allow any length
+                    }
+                    pinInputField.value = pinInput;
+                };
+            });
+
+            document.getElementById('enter-pin-btn').onclick = handlePinLoginAttempt;
+        }
+
+        /**
+         * Handles the PIN entry attempt for any user.
+         */
+        async function handlePinLoginAttempt() {
+            if (pinInput.length === 0) {
+                renderMessageBox('Please enter your PIN.', () => {});
+                return;
+            }
+
+            try {
+                const response = await fetch(`${API_BASE_URL}/login_pin`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pin: pinInput })
+                });
+                const data = await response.json();
+
+                if (response.ok) {
+                    pinInput = ''; // Clear PIN input
+                    if (data.user.role === 'worker') {
+                        // For workers, immediately fetch their status for the workerStatus screen
+                        const statusResponse = await fetch(`${API_BASE_URL}/get_worker_status_by_pin`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ pin: data.user.pin }) // Use the user's PIN to get status
+                        });
+                        const statusData = await statusResponse.json();
+                        if (statusResponse.ok) {
+                            kioskUserData = statusData; // Store comprehensive worker status data
+                            currentScreen = 'workerStatus';
+                            renderApp();
+                        } else {
+                            renderMessageBox(`Error fetching worker status: ${statusData.message}`, () => {
+                                currentScreen = 'welcome'; // Go back to welcome if status fetch fails
+                                renderApp();
+                            });
+                        }
+                    } else if (data.user.role === 'ADMIN' || data.user.role === 'TIMEKEEPER') {
+                        currentUser = data.user;
+                        userRole = data.user.role;
+                        localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                        localStorage.setItem('userRole', userRole);
+                        currentScreen = 'adminDashboard';
+                        renderMessageBox('Login successful!', renderApp);
+                    } else {
+                        renderMessageBox('Unknown user role. Access denied.', () => {
+                            currentScreen = 'welcome'; // Go back to welcome if role is unknown
+                            renderApp();
+                        });
+                    }
+                } else {
+                    renderMessageBox(`Login failed: ${data.message}`, () => {});
+                }
+            } catch (error) {
+                console.error("PIN login attempt error:", error);
+                renderMessageBox(`Login failed: ${error.message}`, () => {});
+            }
+        }
+
+        // --- Worker Status Display Screen ---
+        function renderWorkerStatusScreen(parentDiv, data) {
+            if (!data || !data.user) {
+                renderMessageBox('No status data to display. Please try again.', () => { currentScreen = 'welcome'; renderApp(); });
+                return;
+            }
+
+            const isClockedIn = data.is_clocked_in;
+            const statusColor = isClockedIn ? 'text-green-600' : 'text-red-600';
+            const statusText = isClockedIn ? 'Clocked In' : 'Clocked Out';
+
+            let sessionDetails = '';
+            if (isClockedIn && data.current_session_start) {
+                sessionDetails = `
+                    <p class="text-lg text-gray-600">Session started at:</p>
+                    <p class="text-lg font-semibold text-gray-700">${formatTime(data.current_session_start)}</p>
+                `;
+            } else if (!isClockedIn && data.last_session_total_hours !== null) {
+                sessionDetails = `
+                    <p class="text-lg text-gray-600">Last Session:</p>
+                    <p class="text-md text-gray-500">From: ${formatTime(data.last_session_login_time)}</p>
+                    <p class="text-md text-gray-500">To: ${formatTime(data.last_session_logout_time)}</p>
+                    <p class="text-lg font-semibold text-gray-700">Total: ${data.last_session_total_hours} hrs</p>
+                `;
+            }
+
+            // Historical entries for the worker
+            const historicalEntriesHtml = data.historical_entries.length > 0 ? `
+                <h3 class="text-xl font-bold text-gray-800 mb-4 mt-8">Your Past Sessions:</h3>
+                <div class="table-container mb-4 max-h-60 overflow-y-auto">
+                    <table>
+                        <thead class="bg-blue-100">
+                            <tr>
+                                <th>Date</th>
+                                <th>Clock In</th>
+                                <th>Clock Out</th>
+                                <th>Hours</th>
+                                <th>Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${data.historical_entries.map(entry => `
+                                <tr class="${entry.edited ? 'edited-entry' : ''} border-b border-gray-200 hover:bg-gray-50">
+                                    <td class="py-2 px-3 text-sm text-gray-800">${entry.date}</td>
+                                    <td class="py-2 px-3 text-sm text-gray-800">${entry.loginTime ? formatTime(entry.loginTime) : 'N/A'}</td>
+                                    <td class="py-2 px-3 text-sm text-gray-800">${entry.logoutTime ? formatTime(entry.logoutTime) : 'Ongoing'}</td>
+                                    <td class="py-2 px-3 text-sm text-gray-800">${entry.totalHours ? `${entry.totalHours} hrs` : 'N/A'}</td>
+                                    <td class="py-2 px-3 text-sm text-gray-800">
+                                        ${entry.editNotesFull && entry.editNotesFull.length > 0 ?
+                                            `<button data-entity-id="${entry.id}" data-entity-type="time_entry" class="view-notes-btn px-2 py-1 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-xs font-semibold">View Notes</button>` : 'N/A'
+                                        }
+                                    </td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            ` : `<p class="text-center text-gray-600 text-md mt-4">No past sessions recorded.</p>`;
+
+            parentDiv.innerHTML = `
+                <div class="min-h-screen flex flex-col items-center justify-center bg-gray-100 p-4">
+                    <div class="bg-white p-8 rounded-lg shadow-lg max-w-md w-full text-center">
+                        <h2 class="text-3xl font-bold text-gray-800 mb-4">Welcome, ${data.user.name}!</h2>
+                        <p class="text-2xl font-semibold text-gray-800 mb-6">
+                            You are currently <span class="${statusColor}">${statusText}</span>.
+                        </p>
+                        ${sessionDetails}
+                        <div class="flex justify-center space-x-4 mt-8">
+                            <button id="clock-in-btn" class="px-8 py-4 rounded-full text-xl font-bold transition duration-300 ${isClockedIn ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700 shadow-lg'}" ${isClockedIn ? 'disabled' : ''}>
+                                Clock In
+                            </button>
+                            <button id="clock-out-btn" class="px-8 py-4 rounded-full text-xl font-bold transition duration-300 ${!isClockedIn ? 'bg-gray-400 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-700 shadow-lg'}" ${!isClockedIn ? 'disabled' : ''}>
+                                Clock Out
+                            </button>
+                        </div>
+                        ${historicalEntriesHtml}
+                        <button id="close-status-btn" class="w-full mt-8 py-3 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition duration-200 text-lg font-semibold">
+                            Return to PIN Entry
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('clock-in-btn').onclick = async () => {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/clock_in`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ user_id: data.user.id })
+                    });
+                    const result = await response.json();
+                    renderMessageBox(result.message, () => {
+                        currentScreen = 'welcome'; // Go back to welcome after action
+                        pinInput = ''; // Clear pin input for next worker
+                        renderApp();
+                    });
+                } catch (error) {
+                    console.error("Clock in error:", error);
+                    renderMessageBox(`Clock in failed: ${error.message}`, () => {});
+                }
+            };
+
+            document.getElementById('clock-out-btn').onclick = async () => {
+                try {
+                    const response = await fetch(`${API_BASE_URL}/clock_out`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ user_id: data.user.id })
+                    });
+                    const result = await response.json();
+                    renderMessageBox(result.message, () => {
+                        currentScreen = 'welcome'; // Go back to welcome after action
+                        pinInput = ''; // Clear pin input for next worker
+                        renderApp();
+                    });
+                } catch (error) {
+                    console.error("Clock out error:", error);
+                    renderMessageBox(`Clock out failed: ${error.message}`, () => {});
+                }
+            };
+
+            document.getElementById('close-status-btn').onclick = () => {
+                currentScreen = 'welcome';
+                kioskUserData = null; // Clear status data
+                pinInput = ''; // Clear pin input for next worker
+                renderApp();
+            };
+
+            document.querySelectorAll('.view-notes-btn').forEach(button => {
+                button.onclick = (event) => {
+                    const entityId = event.target.dataset.entityId;
+                    const entityType = event.target.dataset.entityType;
+                    const entityName = data.user.name; // For worker status screen, it's always the current user's entry
+                    renderNotesModal(entityId, entityType, entityName);
+                };
+            });
+        }
+
+        // --- Admin Dashboard (for ADMIN/TIMEKEEPER) ---
+        let allUsers = [];
+        let allTimeEntries = [];
+        let showAddUserModal = false;
+        let newUserName = '';
+        let newUserEmail = ''; // Not required for workers
+        let newPhoneNumber = ''; // New state variable for phone number
+        let newUserRole = 'worker'; // Default to worker in modal
+        let newUserPin = '';
+        let userToDelete = null; // To store user object for deletion confirmation
+
+        let showEditTimeEntryModal = false;
+        let currentEditEntry = null; // Stores the time entry being edited
+        let editLoginTime = '';
+        let editLogoutTime = '';
+        let editNote = '';
+
+        let userToSuspend = null; // To store user for suspension/unsuspension
+        let isSuspending = false; // Flag to indicate if we're suspending or unsuspending
+
+
+        async function renderAdminDashboard(parentDiv) {
+            if (!currentUser || (userRole !== 'ADMIN' && userRole !== 'TIMEKEEPER')) {
+                 renderAccessDenied(parentDiv); // Ensure only authorized roles see this
+                 return;
+            }
+
+            try {
+                // Fetch all users
+                const usersResponse = await fetch(`${API_BASE_URL}/users`);
+                if (usersResponse.ok) {
+                    allUsers = await usersResponse.json();
+                } else {
+                    console.error("Failed to fetch users:", await usersResponse.json());
+                }
+
+                // Fetch all time entries
+                const entriesResponse = await fetch(`${API_BASE_URL}/time_entries`);
+                if (entriesResponse.ok) {
+                    allTimeEntries = await entriesResponse.json();
+                    allTimeEntries.sort((a, b) => new Date(b.loginTime).getTime() - new Date(a.loginTime).getTime());
+                } else {
+                    console.error("Failed to fetch time entries:", await entriesResponse.json());
+                }
+
+            } catch (error) {
+                console.error("Error fetching admin data:", error);
+                renderMessageBox(`Error loading dashboard: ${error.message}`, () => {});
+                return; // Exit if data fetching fails
+            }
+
+            // Determine current user's clock-in status for self-management buttons
+            const selfActiveEntry = allTimeEntries.find(entry => entry.userId === currentUser.id && entry.logoutTime === null);
+            const selfIsClockedIn = !!selfActiveEntry;
+            const selfCurrentSessionStart = selfActiveEntry ? selfActiveEntry.loginTime : null;
+
+            // Calculate current status for *other* users in the table
+            const usersWithStatus = allUsers.map(user => {
+                const lastEntry = allTimeEntries.find(entry => entry.userId === user.id && entry.logoutTime === null);
+                return {
+                    ...user,
+                    isClockedIn: !!lastEntry
+                };
+            });
+
+            parentDiv.innerHTML = `
+                <div class="min-h-screen bg-gray-100 p-4 flex flex-col items-center">
+                    <div class="w-full max-w-6xl bg-white rounded-lg shadow-xl p-8 mb-8">
+                        <h2 class="text-4xl font-bold text-gray-800 mb-6 text-center">${userRole} Dashboard</h2>
+                        <p class="text-xl text-gray-700 mb-4 text-center">
+                            Welcome, <span class="font-semibold">${currentUser.name || currentUser.email || 'User'}</span>!
+                        </p>
+                        <p class="text-lg text-gray-700 mb-6 text-center">
+                            You are currently <span class="font-bold ${selfIsClockedIn ? 'text-green-600' : 'text-red-600'}">
+                                ${selfIsClockedIn ? 'Clocked In' : 'Clocked Out'}
+                            </span>.
+                            ${selfIsClockedIn && selfCurrentSessionStart ? `Session started at: ${formatTime(selfCurrentSessionStart)}` : ''}
+                        </p>
+
+                        <div class="flex justify-center space-x-4 mb-8">
+                            <button id="self-clock-in-btn" class="px-6 py-3 rounded-md text-lg font-semibold transition duration-300
+                                ${selfIsClockedIn ? 'bg-gray-400 cursor-not-allowed' : 'bg-green-600 text-white hover:bg-green-700 shadow-lg'}"
+                                ${selfIsClockedIn ? 'disabled' : ''}>
+                                Clock In
+                            </button>
+                            <button id="self-clock-out-btn" class="px-6 py-3 rounded-md text-lg font-semibold transition duration-300
+                                ${!selfIsClockedIn ? 'bg-gray-400 cursor-not-allowed' : 'bg-red-600 text-white hover:bg-red-700 shadow-lg'}"
+                                ${!selfIsClockedIn ? 'disabled' : ''}>
+                                Clock Out
+                            </button>
+                            ${userRole === 'ADMIN' || userRole === 'TIMEKEEPER' ? `
+                                <button id="add-user-btn" class="px-6 py-3 bg-purple-600 text-white rounded-md hover:bg-purple-700 transition duration-200 text-lg font-semibold shadow-lg">
+                                    Add New User
+                                </button>
+                            ` : ''}
+                        </div>
+
+                        <h3 class="text-3xl font-bold text-gray-800 mb-6 text-center">All Users</h3>
+                        ${usersWithStatus.length === 0 ? `
+                            <p class="text-center text-gray-600 text-lg">No users registered yet.</p>
+                        ` : `
+                            <div class="table-container mb-10">
+                                <table>
+                                    <thead class="bg-blue-100">
+                                        <tr>
+                                            <th class="rounded-tl-lg">Name</th>
+                                            <th>Email</th>
+                                            <th>Phone</th>
+                                            <th>Role</th>
+                                            <th>Status</th>
+                                            <th>Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${usersWithStatus.map(user => `
+                                            <tr class="border-b border-gray-200 hover:bg-gray-50">
+                                                <td class="py-3 px-4 text-sm text-gray-800">${user.name}</td>
+                                                <td class="py-3 px-4 text-sm text-gray-800">${user.email || 'N/A'}</td>
+                                                <td class="py-3 px-4 text-sm text-gray-800">${user.phone || 'N/A'}</td>
+                                                <td class="py-3 px-4 text-sm text-gray-800 capitalize">${user.role}</td>
+                                                <td class="py-3 px-4 text-sm font-medium">
+                                                    <span class="px-2 py-1 rounded-full text-xs font-semibold ${user.is_suspended ? 'bg-gray-400 text-white' : (user.isClockedIn ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800')}">
+                                                        ${user.is_suspended ? 'Suspended' : (user.isClockedIn ? 'Working Now' : 'Logged Out')}
+                                                    </span>
+                                                    ${user.is_suspended && user.suspension_notes_full && user.suspension_notes_full.length > 0 ? `
+                                                        <button data-entity-id="${user.id}" data-entity-type="user_suspension" class="view-notes-btn px-2 py-1 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-xs font-semibold ml-2">View Notes</button>
+                                                    ` : ''}
+                                                </td>
+                                                <td class="py-3 px-4 text-sm">
+                                                    ${(userRole === 'ADMIN' || userRole === 'TIMEKEEPER') && user.isClockedIn && user.id !== currentUser.id && !user.is_suspended ? `
+                                                        <button data-user-id="${user.id}" class="logout-btn px-3 py-1 bg-yellow-500 text-white rounded-md hover:bg-yellow-600 transition duration-200 text-xs font-semibold mr-2">
+                                                            Logout
+                                                        </button>
+                                                    ` : ''}
+                                                    ${(userRole === 'ADMIN' || userRole === 'TIMEKEEPER') && user.id !== currentUser.id ? `
+                                                        <button data-user-id="${user.id}" data-is-suspended="${user.is_suspended}" class="suspend-unsuspend-btn px-3 py-1 ${user.is_suspended ? 'bg-blue-500 hover:bg-blue-600' : 'bg-orange-500 hover:bg-orange-600'} text-white rounded-md transition duration-200 text-xs font-semibold mr-2">
+                                                            ${user.is_suspended ? 'Unsuspend' : 'Suspend'}
+                                                        </button>
+                                                    ` : ''}
+                                                    ${userRole === 'ADMIN' && user.id !== currentUser.id ? `
+                                                        <button data-user-id="${user.id}" class="delete-user-btn px-3 py-1 bg-red-500 text-white rounded-md hover:bg-red-600 transition duration-200 text-xs font-semibold">
+                                                            Delete
+                                                        </button>
+                                                    ` : ''}
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        `}
+
+                        <h3 class="text-3xl font-bold text-gray-800 mb-6 text-center mt-10">All Time Entries</h3>
+                        ${allTimeEntries.length === 0 ? `
+                            <p class="text-center text-gray-600 text-lg">No time entries recorded yet.</p>
+                        ` : `
+                            <div class="table-container">
+                                <table>
+                                    <thead class="bg-blue-100">
+                                        <tr>
+                                            <th class="rounded-tl-lg">Worker Name</th>
+                                            <th>Date</th>
+                                            <th>Clock In</th>
+                                            <th>Clock Out</th>
+                                            <th>Hours</th>
+                                            <th>Notes</th>
+                                            <th class="rounded-tr-lg">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${allTimeEntries.map(entry => `
+                                            <tr class="${entry.edited ? 'edited-entry edited-entry-hover' : ''} border-b border-gray-200 hover:bg-gray-50">
+                                                <td class="py-3 px-4 text-sm text-gray-800">${entry.userName || 'N/A'}</td>
+                                                <td class="py-3 px-4 text-sm text-gray-800">${entry.date}</td>
+                                                <td class="py-3 px-4 text-sm text-gray-800">${entry.loginTime ? formatTime(entry.loginTime) : 'N/A'}</td>
+                                                <td class="py-3 px-4 text-sm text-gray-800">${entry.logoutTime ? formatTime(entry.logoutTime) : 'Ongoing'}</td>
+                                                <td class="py-3 px-4 text-sm text-gray-800">${entry.totalHours ? `${entry.totalHours} hrs` : 'N/A'}</td>
+                                                <td class="py-3 px-4 text-sm text-gray-800">
+                                                    ${entry.editNotesFull && entry.editNotesFull.length > 0 ?
+                                                        `<button data-entity-id="${entry.id}" data-entity-type="time_entry" class="view-notes-btn px-2 py-1 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300 text-xs font-semibold">View Notes</button>` : 'N/A'
+                                                    }
+                                                </td>
+                                                <td class="py-3 px-4 text-sm">
+                                                    ${(userRole === 'ADMIN' || userRole === 'TIMEKEEPER') ? `
+                                                        <button data-entry-id="${entry.id}" class="edit-time-entry-btn px-3 py-1 bg-blue-500 text-white rounded-md hover:bg-blue-600 transition duration-200 text-xs font-semibold">
+                                                            Edit
+                                                        </button>
+                                                    ` : ''}
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        `}
+                    </div>
+                    <button id="logout-btn" class="mt-8 px-6 py-3 bg-red-500 text-white rounded-md hover:bg-red-600 transition duration-200 text-lg font-semibold">
+                        Return to PIN Entry
+                    </button>
+                </div>
+            `;
+
+            // Event Listeners for Admin Dashboard
+            if (userRole === 'ADMIN' || userRole === 'TIMEKEEPER') {
+                document.getElementById('add-user-btn').onclick = () => {
+                    showAddUserModal = true;
+                    renderAddUserModal();
+                };
+
+                document.getElementById('self-clock-in-btn').onclick = () => handleSelfClockAction('clock_in');
+                document.getElementById('self-clock-out-btn').onclick = () => handleSelfClockAction('clock_out');
+            }
+
+            document.querySelectorAll('.delete-user-btn').forEach(button => {
+                button.onclick = (event) => {
+                    const userIdToDelete = event.target.dataset.userId;
+                    userToDelete = allUsers.find(u => u.id === userIdToDelete);
+                    if (userToDelete) {
+                        renderMessageBox(`Are you sure you want to delete user "${userToDelete?.name}"? This action cannot be undone.`, confirmDeleteUser, () => { /* onCancel */ }, true);
+                    }
+                };
+            });
+
+            document.querySelectorAll('.logout-btn').forEach(button => {
+                button.onclick = (event) => {
+                    const userIdToLogout = event.target.dataset.userId;
+                    const userToLogout = allUsers.find(u => u.id === userIdToLogout);
+                    if (userToLogout) {
+                        renderLogoutModal(userIdToLogout, userToLogout.name); // Renamed to renderLogoutModal
+                    }
+                };
+            });
+
+            document.querySelectorAll('.suspend-unsuspend-btn').forEach(button => {
+                button.onclick = (event) => {
+                    const userIdToModify = event.target.dataset.userId;
+                    userToSuspend = allUsers.find(u => u.id === userIdToModify);
+                    if (userToSuspend) {
+                        isSuspending = userToSuspend.is_suspended === false; // If currently not suspended, we're suspending
+                        renderSuspendUserModal();
+                    }
+                };
+            });
+
+            document.querySelectorAll('.edit-time-entry-btn').forEach(button => {
+                button.onclick = (event) => {
+                    const entryIdToEdit = event.target.dataset.entryId;
+                    currentEditEntry = allTimeEntries.find(e => e.id === entryIdToEdit);
+                    if (currentEditEntry) {
+                        editLoginTime = formatToDatetimeLocal(currentEditEntry.loginTime);
+                        editLogoutTime = currentEditEntry.logoutTime ? formatToDatetimeLocal(currentEditEntry.logoutTime) : '';
+                        editNote = ''; // Clear previous note
+                        renderEditTimeEntryModal();
+                    }
+                };
+            });
+
+            // Universal event listener for view notes buttons
+            document.querySelectorAll('.view-notes-btn').forEach(button => {
+                button.onclick = (event) => {
+                    const entityId = event.target.dataset.entityId;
+                    const entityType = event.target.dataset.entityType;
+                    // Find the associated name for the modal title
+                    let entityName = '';
+                    if (entityType === 'time_entry') {
+                        entityName = allTimeEntries.find(e => e.id === entityId)?.userName || 'Time Entry';
+                    } else if (entityType === 'user_suspension') {
+                        entityName = allUsers.find(u => u.id === entityId)?.name || 'User';
+                    }
+                    renderNotesModal(entityId, entityType, entityName);
+                };
+            });
+
+
+            document.getElementById('logout-btn').onclick = handleLogout;
+        }
+
+        /**
+         * Renders a modal displaying all notes for a given entity (time entry or user).
+         * @param {string} entityId - The ID of the entity (time entry or user).
+         * @param {string} entityType - 'time_entry' or 'user_suspension'.
+         * @param {string} entityName - The name of the entity for the modal title.
+         */
+        async function renderNotesModal(entityId, entityType, entityName) {
+            try {
+                const response = await fetch(`${API_BASE_URL}/notes/entity/${entityId}`);
+                const notesData = await response.json();
+
+                let notesHtml = '';
+                if (notesData.length > 0) {
+                    notesHtml = notesData.map(note => `
+                        <div class="mb-3 p-3 bg-gray-50 border border-gray-200 rounded-md">
+                            <p class="text-xs text-gray-500 mb-1">
+                                <strong>${formatTime(note.timestamp)}</strong> by <em>${note.editor || 'System'}</em>
+                            </p>
+                            <pre class="text-sm text-gray-700 whitespace-pre-wrap">${note.note}</pre>
+                        </div>
+                    `).join('');
+                } else {
+                    notesHtml = '<p class="text-center text-gray-600">No notes found for this entry.</p>';
+                }
+
+                renderCustomModal('notes-modal', `
+                    <h3 class="text-2xl font-bold text-gray-800 mb-6 text-center">Notes for ${entityName}</h3>
+                    <div class="max-h-80 overflow-y-auto mb-4 p-2 border border-gray-200 rounded-md bg-white">
+                        ${notesHtml}
+                    </div>
+                    <div class="flex justify-end">
+                        <button id="close-notes-modal" class="px-6 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 transition duration-200">
+                            Close
+                        </button>
+                    </div>
+                `);
+
+                document.getElementById('close-notes-modal').onclick = () => closeCustomModal('notes-modal');
+
+            } catch (error) {
+                console.error("Error fetching notes:", error);
+                renderMessageBox(`Error fetching notes: ${error.message}`, () => {});
+            }
+        }
+
+
+        // --- Handle Self Clock In/Out for Admin/Timekeeper ---
+        async function handleSelfClockAction(actionType) {
+            if (!currentUser || (userRole !== 'ADMIN' && userRole !== 'TIMEKEEPER')) {
+                renderMessageBox('You do not have permission to perform this action.', () => {});
+                return;
+            }
+
+            try {
+                const endpoint = actionType === 'clock_in' ? '/clock_in' : '/clock_out';
+                const response = await fetch(`${API_BASE_URL}${endpoint}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_id: currentUser.id })
+                });
+                const result = await response.json();
+                renderMessageBox(result.message, renderApp); // Re-render dashboard after action
+            } catch (error) {
+                console.error(`Self clock ${actionType} error:`, error);
+                renderMessageBox(`Self clock ${actionType} failed: ${error.message}`, () => {});
+            }
+        }
+
+        // --- Logout Modal (formerly Force Logout Modal) ---
+        function renderLogoutModal(userId, userName) {
+            renderCustomModal('logout-modal', `
+                <h3 class="text-2xl font-bold text-gray-800 mb-6 text-center">Logout User: ${userName}</h3>
+                <div class="mb-4">
+                    <label for="logoutNote" class="block text-gray-700 text-sm font-medium mb-2">Note (Required):</label>
+                    <textarea id="logoutNote" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" rows="3" placeholder="Reason for logout..."></textarea>
+                </div>
+                <div class="flex justify-end space-x-4">
+                    <button id="cancel-logout" class="px-6 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400 transition duration-200">
+                        Cancel
+                    </button>
+                    <button id="confirm-logout" class="px-6 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition duration-200">
+                        Logout
+                    </button>
+                </div>
+            `);
+
+            document.getElementById('cancel-logout').onclick = () => closeCustomModal('logout-modal');
+            document.getElementById('confirm-logout').onclick = async () => {
+                const note = document.getElementById('logoutNote').value;
+                if (!note.trim()) {
+                    renderMessageBox('Please provide a note for logout.', () => {});
+                    return;
+                }
+                try {
+                    const response = await fetch(`${API_BASE_URL}/logout`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ user_id: userId, note: note, requester_id: currentUser.id })
+                    });
+                    const data = await response.json();
+                    renderMessageBox(data.message, () => {
+                        closeCustomModal('logout-modal', renderApp); // Re-render dashboard
+                    });
+                } catch (error) {
+                    console.error("Logout error:", error);
+                    renderMessageBox(`Logout failed: ${error.message}`, () => {});
+                }
+            };
+        }
+
+            // --- Suspend/Unsuspend User Modal ---
+            function renderSuspendUserModal() {
+                if (!userToSuspend) {
+                    closeCustomModal('suspend-user-modal');
+                    return;
+                }
+
+                const actionText = isSuspending ? 'Suspend' : 'Unsuspend';
+                const buttonColor = isSuspending ? 'bg-orange-600 hover:bg-orange-700' : 'bg-blue-600 hover:bg-blue-700';
+
+                renderCustomModal('suspend-user-modal', `
+                    <h3 class="text-2xl font-bold text-gray-800 mb-6 text-center">${actionText} User: ${userToSuspend.name}</h3>
+                    <div class="mb-4">
+                        <label for="suspendNote" class="block text-gray-700 text-sm font-medium mb-2">Note (Required):</label>
+                        <textarea id="suspendNote" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" rows="3" placeholder="Reason for ${actionText.toLowerCase()}..."></textarea>
+                    </div>
+                    <div class="flex justify-end space-x-4">
+                        <button id="cancel-suspend" class="px-6 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400 transition duration-200">
+                            Cancel
+                        </button>
+                        <button id="confirm-suspend" class="px-6 py-2 ${buttonColor} text-white rounded-md transition duration-200">
+                            ${actionText}
+                        </button>
+                    </div>
+                `, () => {
+                    userToSuspend = null; // Clear on close
+                });
+
+                document.getElementById('cancel-suspend').onclick = () => closeCustomModal('suspend-user-modal');
+                document.getElementById('confirm-suspend').onclick = async () => {
+                    const note = document.getElementById('suspendNote').value;
+                    if (!note.trim()) {
+                        renderMessageBox(`Please provide a note for ${actionText.toLowerCase()}.`, () => {});
+                        return;
+                    }
+                    try {
+                        const response = await fetch(`${API_BASE_URL}/suspend_user`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                user_id: userToSuspend.id,
+                                is_suspended: isSuspending,
+                                note: note,
+                                requester_id: currentUser.id
+                            })
+                        });
+                        const data = await response.json();
+                        renderMessageBox(data.message, () => {
+                            closeCustomModal('suspend-user-modal', renderApp); // Close modal and re-render dashboard
+                        });
+                    } catch (error) {
+                        console.error(`${actionText} user error:`, error);
+                        renderMessageBox(`${actionText} user failed: ${error.message}`, () => {});
+                    }
+                };
+            }
+
+
+            // --- Add User Modal ---
+            function renderAddUserModal() {
+                if (!showAddUserModal) {
+                    document.getElementById('add-user-modal')?.remove();
+                    return;
+                }
+
+                let roleOptionsHtml = `
+                    <option value="worker" ${newUserRole === 'worker' ? 'selected' : ''}>Worker</option>
+                `;
+                if (userRole === 'ADMIN') { // Only ADMIN can add ADMIN/TIMEKEEPER
+                    roleOptionsHtml += `
+                        <option value="TIMEKEEPER" ${newUserRole === 'TIMEKEEPER' ? 'selected' : ''}>Timekeeper</option>
+                        <option value="ADMIN" ${newUserRole === 'ADMIN' ? 'selected' : ''}>Admin</option>
+                    `;
+                }
+
+                renderCustomModal('add-user-modal', `
+                    <h3 class="text-2xl font-bold text-gray-800 mb-6 text-center">Add New User</h3>
+                    <div class="mb-4">
+                        <label for="newUserName" class="block text-gray-700 text-sm font-medium mb-2">Name:</label>
+                        <input type="text" id="newUserName" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter user's name" value="${newUserName}">
+                    </div>
+                    <div class="mb-4">
+                        <label for="newUserRole" class="block text-gray-700 text-sm font-medium mb-2">Role:</label>
+                        <select id="newUserRole" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            ${roleOptionsHtml}
+                        </select>
+                    </div>
+                    <div class="mb-4">
+                        <label for="newUserPin" class="block text-gray-700 text-sm font-medium mb-2">PIN:</label>
+                        <input type="text" id="newUserPin" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter PIN" value="${newUserPin}">
+                    </div>
+                    <div class="mb-4">
+                        <label for="newUserEmail" class="block text-gray-700 text-sm font-medium mb-2">Email (Optional):</label>
+                        <input type="email" id="newUserEmail" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter user's email" value="${newUserEmail}">
+                    </div>
+                    <div class="mb-4">
+                        <label for="newPhoneNumber" class="block text-gray-700 text-sm font-medium mb-2">Phone Number (Optional):</label>
+                        <input type="tel" id="newPhoneNumber" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter user's phone number" value="${newPhoneNumber}">
+                    </div>
+                    <div class="flex justify-end space-x-4">
+                        <button id="cancel-add-user" class="px-6 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400 transition duration-200">
+                            Cancel
+                        </button>
+                        <button id="confirm-add-user" class="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition duration-200">
+                            Add User
+                        </button>
+                    </div>
+                `, () => {
+                    // On close callback for modal
+                    showAddUserModal = false;
+                    newUserName = '';
+                    newUserEmail = '';
+                    newPhoneNumber = '';
+                    newUserRole = 'worker';
+                    newUserPin = '';
+                });
+
+                // Update state on input change
+                document.getElementById('newUserName').oninput = (e) => newUserName = e.target.value;
+                document.getElementById('newUserRole').onchange = (e) => {
+                    newUserRole = e.target.value;
+                    renderAddUserModal(); // Re-render to show correct fields
+                };
+                document.getElementById('newUserPin').oninput = (e) => {
+                    newUserPin = e.target.value;
+                };
+                document.getElementById('newUserEmail').oninput = (e) => newUserEmail = e.target.value;
+                document.getElementById('newPhoneNumber').oninput = (e) => newPhoneNumber = e.target.value;
+
+                document.getElementById('cancel-add-user').onclick = () => closeCustomModal('add-user-modal');
+                document.getElementById('confirm-add-user').onclick = handleAddUser;
+            }
+
+            async function handleAddUser() {
+                let payload = {
+                    name: newUserName,
+                    role: newUserRole,
+                    pin: newUserPin,
+                    requester_role: userRole,
+                    requester_name: currentUser.name
+                };
+
+                if (!newUserName || !newUserPin) {
+                    renderMessageBox('Please enter name and PIN.', () => {});
+                    return;
+                }
+
+                if (newUserEmail) {
+                    payload.email = newUserEmail;
+                }
+                if (newPhoneNumber) {
+                    payload.phone = newPhoneNumber;
+                }
+
+                try {
+                    const response = await fetch(`${API_BASE_URL}/users/add`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        renderMessageBox('User added successfully!', () => {
+                            closeCustomModal('add-user-modal', renderApp); // Close modal and re-render dashboard
+                        });
+                    } else {
+                        renderMessageBox(`Error adding user: ${data.message}`, () => {});
+                    }
+                } catch (error) {
+                    console.error("Add user error:", error);
+                    renderMessageBox(`Error adding user: ${error.message}`, () => {});
+                }
+            }
+
+            async function confirmDeleteUser() {
+                if (!userToDelete) return;
+
+                const requester_id = currentUser.id;
+
+                try {
+                    const response = await fetch(`${API_BASE_URL}/users/delete/${userToDelete.id}`, {
+                        method: 'DELETE',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ requester_id: requester_id })
+                    });
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        renderMessageBox(`User ${userToDelete.name} deleted successfully!`, () => {
+                            renderApp(); // Re-render admin dashboard
+                        });
+                    } else {
+                        renderMessageBox(`Error deleting user: ${data.message}`, () => {});
+                    }
+                } catch (error) {
+                    console.error("Delete user error:", error);
+                    renderMessageBox(`Error deleting user: ${error.message}`, () => {});
+                }
+            }
+
+            // --- Edit Time Entry Modal ---
+            function renderEditTimeEntryModal() {
+                if (!currentEditEntry) {
+                    closeCustomModal('edit-time-entry-modal');
+                    return;
+                }
+
+                const userName = allUsers.find(u => u.id === currentEditEntry.userId)?.name || 'Unknown User';
+
+                renderCustomModal('edit-time-entry-modal', `
+                    <h3 class="text-2xl font-bold text-gray-800 mb-6 text-center">Edit Time Entry for ${userName}</h3>
+                    <div class="mb-4">
+                        <label for="editLoginTime" class="block text-gray-700 text-sm font-medium mb-2">Clock In Time:</label>
+                        <input type="datetime-local" id="editLoginTime" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" value="${editLoginTime}">
+                    </div>
+                    <div class="mb-4">
+                        <label for="editLogoutTime" class="block text-gray-700 text-sm font-medium mb-2">Clock Out Time (leave blank if ongoing):</label>
+                        <input type="datetime-local" id="editLogoutTime" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" value="${editLogoutTime}">
+                    </div>
+                    <div class="mb-4">
+                        <label for="editNote" class="block text-gray-700 text-sm font-medium mb-2">Reason for Edit (Required):</label>
+                        <textarea id="editNote" class="w-full px-4 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" rows="3" placeholder="Explain why you are editing this entry...">${editNote}</textarea>
+                    </div>
+                    <div class="flex justify-end space-x-4">
+                        <button id="cancel-edit-entry" class="px-6 py-2 bg-gray-300 text-gray-800 rounded-md hover:bg-gray-400 transition duration-200">
+                            Cancel
+                        </button>
+                        <button id="confirm-edit-entry" class="px-6 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition duration-200">
+                            Save Changes
+                        </button>
+                    </div>
+                `, () => {
+                    // On close callback for modal
+                    currentEditEntry = null;
+                    editLoginTime = '';
+                    editLogoutTime = '';
+                    editNote = '';
+                });
+
+                document.getElementById('editLoginTime').onchange = (e) => editLoginTime = e.target.value;
+                document.getElementById('editLogoutTime').onchange = (e) => editLogoutTime = e.target.value;
+                document.getElementById('editNote').oninput = (e) => editNote = e.target.value;
+
+                document.getElementById('cancel-edit-entry').onclick = () => closeCustomModal('edit-time-entry-modal');
+                document.getElementById('confirm-edit-entry').onclick = handleEditTimeEntry;
+            }
+
+            async function handleEditTimeEntry() {
+                if (!editNote.trim()) {
+                    renderMessageBox('A reason for editing is required.', () => {});
+                    return;
+                }
+
+                try {
+                    const payload = {
+                        entry_id: currentEditEntry.id,
+                        login_time: editLoginTime,
+                        logout_time: editLogoutTime,
+                        edit_note: editNote,
+                        editor_user_id: currentUser.id // Pass the ID of the ADMIN/TIMEKEEPER
+                    };
+
+                    const response = await fetch(`${API_BASE_URL}/edit_time_entry`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    const data = await response.json();
+
+                    if (response.ok) {
+                        renderMessageBox('Time entry updated successfully!', () => {
+                            closeCustomModal('edit-time-entry-modal', renderApp); // Close modal and re-render dashboard
+                        });
+                    } else {
+                        renderMessageBox(`Error editing time entry: ${data.message}`, () => {});
+                    }
+                } catch (error) {
+                    console.error("Edit time entry error:", error);
+                    renderMessageBox(`Error editing time entry: ${error.message}`, () => {});
+                }
+            }
+
+
+            // --- Access Denied Page ---
+            function renderAccessDenied(parentDiv) {
+                parentDiv.innerHTML = `
+                    <div class="min-h-screen flex items-center justify-center bg-gray-100 p-4">
+                        <div class="bg-white p-8 rounded-lg shadow-lg text-center max-w-md w-full">
+                            <h2 class="text-3xl font-bold text-gray-800 mb-4">Access Denied</h2>
+                            <p class="text-lg text-gray-600 mb-6">Your role is not recognized or you do not have sufficient permissions.</p>
+                            <button id="logout-btn" class="w-full py-3 bg-red-500 text-white rounded-md hover:bg-red-600 transition duration-200 text-lg font-semibold">
+                                Return to PIN Entry
+                            </button>
+                        </div>
+                    </div>
+                `;
+                document.getElementById('logout-btn').onclick = handleLogout;
+            }
+
+            // --- Initial Load ---
+            document.addEventListener('DOMContentLoaded', () => {
+                // Check for existing ADMIN/TIMEKEEPER session in localStorage
+                const storedUser = localStorage.getItem('currentUser');
+                const storedRole = localStorage.getItem('userRole');
+                if (storedUser && storedRole) {
+                    currentUser = JSON.parse(storedUser);
+                    userRole = storedRole;
+                    currentScreen = 'adminDashboard'; // If ADMIN/TIMEKEEPER was logged in, go directly to their dashboard
+                }
+                renderApp();
+            });
+    </script>
+</body>
+</html>
