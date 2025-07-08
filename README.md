@@ -34,4 +34,4 @@ notes.json       # Edit logs and suspension notes (generated)
 
 ## ⚠️ License & Usage
 
-This project is owned by `jlaiii`. Y
+This project is owned by `jlaiii`.
