@@ -35,3 +35,6 @@ notes.json       # Edit logs and suspension notes (generated)
 ## ⚠️ License & Usage
 
 This project is owned by `jlaiii`.
+
+![Alt Text](https://i.imgur.com/T3g8Ize.gif)
+![Alt Text](https://i.imgur.com/hFAg9zd.gif)
